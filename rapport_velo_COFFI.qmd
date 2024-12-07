@@ -1,0 +1,529 @@
+---
+title: "Usage des vélos de location de la ville de Washington D.C."
+author: "Paul Coffi"
+lang: fr # En français
+format: 
+  html:
+    theme: cosmo
+    code-fold: true
+    code-annotations: hover
+    toc: true
+    toc-depth: 2
+    toc-location: right
+    embed-resources: true
+    mathjax: default
+---
+
+```{r}
+#| label: setup
+#| include: false 
+
+# Chunk pour régler les options
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE, 
+                      warning = FALSE)
+```
+
+## Packages {.unnumbered}
+
+L'étude ci-dessous nécessite les paquets suivants:
+
+```{r}
+#| label: librairies
+# Listez tous les packages utilisés
+library(tidyverse) # Pour la manipulation des données
+library(corrplot)
+library(emmeans)
+library(car)
+library(gridExtra)
+```
+
+## Données
+
+L’objectif de l’étude est de déterminer
+
+-   Quels sont les facteurs les plus influents sur l’utilisation du vélo à Washington, et comment ces facteurs impactent l’usage du vélo.
+
+-   Si il existe une configuration de facteurs où l’utilisation des vélos serait maximale;
+
+-   Pour une configuration donnée, peut on fournir un intervalle de confiance à 95% sur le nombre de vélos qui seraient loués ce jour là?
+
+On a deux types de variables:
+
+-   Les variables quantitatives: temp, hum, windspeed
+
+-   Les variables qualitatives: yr,season, month, day, hr, holiday, weekday, workingday, weathersit
+
+```{r chargement des données}
+
+donnees= read.csv("donnees_velo.txt", sep=";")
+donnees= as_tibble(donnees)
+
+
+```
+
+## 1. Analyse exploratoire des données
+
+Dans un premier temps, nous allons transformer les colonnes yr,season, month, day, hr, holiday, weekday, workingday, weathersit en facteur et traduire toutes les colonnes.
+
+```{r modification}
+
+#| code-fold: show
+donnees_new= as_tibble(donnees)|>
+  mutate(hr= as.factor(hr), season= as.factor(season), mnth=as.factor(mnth), holiday= as.factor(holiday), weekday= as.factor(weekday), workingday= as.factor(workingday), weathersit= as.factor(weathersit)) |>
+  rename(saison= season,annee= yr,mois= mnth,heure= hr,férié= holiday, jour_de_la_semaine=weekday, jour_de_travail=workingday, météo= weathersit,température= temp,humidité= hum,vitesse_du_vent= windspeed, occasionnel=casual ,enregistré=registered,total= cnt)
+```
+
+### *1.1 Variables quantitatives*
+
+Pour les variables quantitatives, nous allons créer la matrice de corrélation afin de dégager les corrélations qui puissent exister entre les variables quantitatives et entre les variables explicatives et la variable cible: Le nombre de vélos utilisés qui se décompose en 2 catégories(utilisateurs enregistrés et utilisateurs occasionnels)
+
+```{r analyse de la corrélation des variables quantitatives}
+
+
+variable_quantitative= donnees_new |> 
+  select(température, humidité, vitesse_du_vent, occasionnel, enregistré, total)
+
+matrice_correlation= cor(variable_quantitative)
+
+corrplot(matrice_correlation)
+
+```
+
+On remarque qu'il n'y a pas de multicolinéarité entre les variables car les corrélations entre les variables ne sont pas très élevées.
+
+Entre les variables quantitatives, on observe une corrélation linéaire :
+
+-   Négative entre l'humidité et et la vitesse du vent(-0.29)
+
+    ```{r humidite~vitesse du vent}
+
+    ggplot(donnees_new) +
+      aes(x= vitesse_du_vent, y= humidité)+
+      geom_point(colour= 'blue')
+    ```
+
+-   Presque nul: entre la température et l'humidité(-0.06), on va effectuer un test pour savoir si la corrélation est significativement differente de 0 ou non.
+
+    ```{r temp~hum}
+
+    ggplot(donnees_new) +
+      aes(température, y= humidité)+
+      geom_point(colour= 'orange')+
+        labs(x="Température","humidité",title = "Corrélation linéaire presque nul entre la température et le nombre d'utilisateurs enregistrés")
+
+    ```
+
+D'après le test de correlation, la corrélation linéaire entre la température et l'humidité n'est pas significativement différente de 0.
+
+L'hypothèse nulle de ce test formulée comme suit :
+
+$$
+H_0: \text{La corrélation linéaire est nulle.}
+$$
+
+Contre l'hypothèse alternative:
+
+$$
+H_1: \text{La corrélation linéaire est nulle.}
+$$
+
+```{r test de corrélation}
+
+attach(donnees_new)
+cor.test(température, humidité)
+detach(donnees_new)
+```
+
+Entre les variables quantitatives et les variables cibles(total, enregistré, occasionnel), on observe:
+
+-   Une **corrélation linéaire positive** entre la **température** et les **variables cibles**, mais **un peu plus forte par rapport à la variable occasionnel** ce qui veut dire que **une augmentation de la température a un effet sur le nombre d'utilisateurs occasionnels**
+
+    ```{r temp~cnt,reg, cas}
+
+
+
+       plot1= ggplot(donnees_new) +
+      aes(x= température, y= total) +
+      geom_point()+
+      labs(x="Température",y="Nombre total d'utilisateurs",title = "Corrélation linéaire >0")
+
+    plot2=ggplot(donnees_new) +
+      aes(x= température, y= enregistré) +
+      geom_point(colour='red') +
+      labs(x="Température",y="Nombre d'utilisateurs enregistrés",title = "Corrélation linéaire >0")
+
+    plot3=ggplot(donnees_new) +
+      aes(x= température, y= occasionnel) +
+      geom_point(colour='green')+
+        labs(x="Température",y="Nombre d'utilisateurs occasionnels",title = "Corrélation linéaire >0")
+      grid.arrange(plot1, plot2, plot3, nrow = 1)
+
+    ```
+
+-   **Une corrélation linéaire négative** entre l'**humidité** et les **variables cibles**, mais **un peu plus faible par rapport à la variable enregistré** ce qui veut dire que l**'humidité a aussi plus d'effets sur les utilisateurs occasionnels**
+
+    ```{r hum~y}
+
+    #| code-fold: show
+
+    plot4=ggplot(donnees_new) +
+      aes(x= humidité, y= total) +
+      geom_point()+
+      labs(x="humidité",y="Nombre total d'utilisateurs",title = "Corrélation linéaire <0")
+
+    plot5= ggplot(donnees_new) +
+      aes(x= humidité, y= enregistré) +
+      geom_point(colour='red') +
+      labs(x="humidité",y="Nombre d'utilisateurs enregistrés",title = "Corrélation linéaire <0")
+
+    plot6= ggplot(donnees_new) +
+      aes(x= humidité, y= occasionnel) +
+      geom_point(colour='green')+
+        labs(x="humidité",y="Nombre d'utilisateurs occasionnels",title = "Corrélation linéaire <0")
+
+    grid.arrange(plot4, plot5, plot6, nrow = 1)
+    ```
+
+**Une corrélation linéaire presque nulle** entre la vitesse du vent et la variable cible: En supposant que les deux variables sont distribuées de maniere **normale**, **on fera un test pour savoir si la corrélation est significativement differente de 0.** En supposant que les deux variables sont distribuées de maniere normale.
+
+```{r windspeed~y}
+
+#| code-fold: show
+ggplot(donnees_new) +
+  aes(x= vitesse_du_vent, y= total) +
+  geom_point(colour='green')+
+  labs(x="Vitesse du vent", y="Total", title = "Corrélation linéaire presque nulle entre la vitesse du vent et la variable cible")
+```
+
+D'apres les résultats du test la **corrélation linéaire** entre la vitesse du vent et le nombre d'utilisateurs total n'est **pas significativement différente de zéro**.
+
+```{r test cor vitesse_vent total}
+
+#| code-fold: show
+attach(donnees_new)
+cor.test(x= vitesse_du_vent,y= total)
+detach(donnees_new)
+```
+
+### *1.1 Variables qualitatives*
+
+On cherche maintenant à expliquer les effets entre les niveaux de chaque facteur sur l'utilisation des vélos: season, day, hr, holiday, weekday, workingday, weathersit.
+
+-   Tout d'abord, nous allons vérifier s'il existe une différence entre les moyennes d'utilisation de vélos pour chaque saison.
+
+    ```{r cnt~season}
+
+    agg1= donnees_new |>
+      group_by(saison) |>
+      summarise(moyenne_par_saison= mean(total))
+    ggplot(agg1) +
+      aes(x= saison, y= moyenne_par_saison, fill=saison ) +
+      geom_bar(stat = 'identity') +
+      labs(x= 'Saison', y= "Moyenne du nombre d'utilisateurs", title= 'Moyenne par saison' )
+
+    ```
+
+    Un premier essai nous a montré qu'il est préférable d'expliquer plutot la racine de la variable cible pour se rapprocher des hypothèses de normalité.
+
+    On compare les moyennes de entre chaque groupe après avoir ajusté le modèle:
+
+    ```{r anova saison}
+
+    #| code-fold: show
+    # Ajustement du modèle d'ANOVA
+    modele1 <- lm(sqrt(total) ~ saison, data = donnees_new)
+    emmeans(object = modele1, specs = "saison") %>% # Calcul des moyennes par groupe 
+      contrast(method = "pairwise", adjust = "bonferroni") # Tests de comparaison
+
+    ```
+
+    Pour le premier test, on observe une difference de moyenne du nombre d'utilisateurs total entre printemps et été, printemps et automne, printemps et hiver, été été et automne, automne et hiver. Mais la difference n'est pas claire entre l'hiver et l'été.
+
+    On va réaliser une ANOVA pour vérifier cela. Le modèle d'ANOVA à un facteur est donné par :
+
+$$
+Y_{ij} = \mu + \tau_i + \epsilon_{ij}
+$$
+
+où :
+
+-   $(Y_{ij})$ est la racine carrée du nombre de vélo observée pour l'individu (j) dans le groupe (i). -
+
+-   $(\mu)$ est la moyenne globale.
+
+-   $(\tau_i)$ est l'effet du (i)-ème groupe (saison).
+
+-   $(\epsilon_{ij})$ est l'erreur aléatoire, supposée suivre une distribution normale.
+
+    **Hypothèse Nulle** :
+
+$$
+H_0: \mu_{\text{saison1}} = \mu_{\text{saison2}} = \mu_{\text{saison3}} = \ldots = \mu_{\text{saison}k}
+$$ **Contre l'hypothèse alternative**:
+
+$$
+H_1: \text{Au moins une } \mu_{\text{saison}i} \text{ est différente.}
+$$
+
+```{r anovaa}
+
+    car::Anova(modele1)
+```
+
+```         
+les deux tests montrent qu'il existe au moins une différence de moyenne entre les différentes saisons.
+
+On va vérifier si les tests réalisés respectent les hypothèses de normalité des résidus , d'homogénéité des variances des résidus en supposant l'indépendance des résidus.
+```
+
+-   **Test de normalité**
+
+    ```{r test de normalité}
+
+    plot(modele1, 2)
+    ```
+
+    D'apres le graphique, les résidus sont presque aligné autour de la ligne.
+
+-   **Test d'homogénéité de la variance**
+
+    ```{r test homogénéité de la variance}
+
+    #| code-fold: show
+    plot(modele1, 3)
+    ```
+
+    On remarque que la variance est presque la meme dans chaque groupe.
+
+-   Nous allons vérifier s'il existe une difference de moyenne de nombre d'utilisateurs par heure
+
+    ```{r moyenne_par_heure}
+
+    #| code-fold: show
+
+    agg2= donnees_new |>
+      group_by(heure) |>
+      summarise(moyenne_par_heure= mean(total))
+    ggplot(agg2) +
+      aes(x= heure, y= moyenne_par_heure, fill=heure ) +
+      geom_bar(stat = 'identity') +
+      labs(x= 'heure', y= 'Moyenne', title= 'heure' )
+    ```
+
+On voit très clairement qu'il y'a une différence de moyenne du nombres d'utilisateurs par heure. Nous allons réaliser une ANOVA à 1 facteur pour confirmer cela.
+
+```{r hr~cnt model}
+modele2 <- lm(sqrt(total) ~ heure, data = donnees_new)
+car::Anova(modele1)
+```
+
+D'apres le test, Il existe une différence significative des moyennes du nombre d'utilisateurs par heure.
+
+**Vérification des hypothèses de l'ANOVA**
+
+```{r ANOVA hypothesis}
+
+par(mfrow=c(2,2))
+plot(modele2)
+```
+
+D'apres les graphiques, on peut considérer les hypothèses comme vraies.
+
+-   Nous allons vérifier s'il existe une difference de moyenne de nombre d'utilisateurs en fonction du fait que le jour soit ouvré ou non.
+
+    ```{r jour ouvré}
+
+    #| code-fold: show
+
+    agg3= donnees_new |>
+      group_by(jour_de_travail) |>
+      summarise(moyenne_par_jt= mean(total))
+    ggplot(agg3) +
+      aes(x= jour_de_travail, y= moyenne_par_jt, fill=jour_de_travail ) +
+      geom_bar(stat = 'identity') +
+      labs(x= 'Jour ouvré', y= 'Moyenne', title= "Moyenne d'utilisation en fonction du jour" )
+    ```
+
+    Le graphique ci-dessus nous laisse penser que la différence entre les deux groupes n'est pas significative.
+
+    Nous allons réaliser une ANOVA à un facteur pour vérifier cela.
+
+    ```{r jour_de_travail}
+    modele3 <- lm(sqrt(total) ~ jour_de_travail, data = donnees_new)
+    car::Anova(modele3)
+    ```
+
+    D'apres l'ANOVA la différence entre les deux groupes est significatives. C'est à dire que le fait qu'un jour soit ouvré ou non n'influence pas le nombre d'utilisation des vélos.
+
+    Nous allons vérifier si les hypothèses de l'ANOVA sont respectées.
+
+    ```{r verif}
+
+    par(mfrow=c(2,2))
+    plot(modele3)
+    ```
+
+    D'apres les graphiques, les hypothèses sont vérifiées. Il y'a donc une différence significative de moyenne de nombres d'utilisateurs entre les jours ouvrés et les jours non ouvrés.
+
+-   Nous allons vérifier s'il existe une difference de moyenne de nombre d'utilisateurs en fonction de la météo
+
+    ```{r}
+
+
+    #| code-fold: show
+
+    agg4= donnees_new |>
+      group_by(météo) |>
+      summarise(moyenne_par_météo= mean(total))
+    ggplot(agg4) +
+      aes(x= météo, y= moyenne_par_météo, fill= météo ) +
+      geom_bar(stat = 'identity') +
+      labs(x= 'Jour ouvré', y= 'Moyenne', title= "Moyenne d'utilisation en fonction de la météo" )
+
+    ```
+
+On voit très clairement qu'il y'a une différence entre les moyennes d'utilisations en fonction de la météo.
+
+Nous allons confirmer cela avec une ANOVA à 1 facteur.
+
+```{r météo}
+modele4 <- lm(sqrt(total) ~ météo, data = donnees_new)
+car::Anova(modele4)
+```
+
+D'apres le test, il y'a une difference entre les moyennes d'utilisations par météo.
+
+**Vérification des hypothèses de l'ANOVA**
+
+```{r verification des hypotheses}
+
+par(mfrow=c(2,2))
+plot(modele4)
+```
+
+D'apres les graphiques les hypothèses sont vraies, il y'a une difference entre les moyennes d'utilisations en fonction de la météo.
+
+## 2. Le modele linéaire
+
+Dans notre étude, aucune variable quantitative n'a un coefficient de corrélation linéaire par rapport à la variable cible significativement différent de 0. On a donc aucune variable quantitative à exclure de notre modèle. On va devoir choisir une seule variable entre la variable férié, la variable jour_de_travail et la variabe jour_de_la_semaine pour éviter la multicolinéarité. Par la suite, nous allons choisir la variable jour_de_la_semaine pour perdre le moins d'informations possible.
+
+Dans un premier temps, on va construire le modele linéaire:
+
+$$
+\text{total} = \beta_0 + \beta_1 \cdot \text{température} + \beta_2 \cdot \text{humidité} + \beta_3 \cdot \text{vitesse\_du\_vent} + \beta_4 \cdot \text{année} + \beta_5 \cdot \text{saison} + \beta_6 \cdot \text{mois} +
+$$ $$\beta_7 \cdot \text{heure} +
+\beta_8 \cdot \text{jour\_de\_la\_semaine} +
+\beta_{9} \cdot \text{météo} + \epsilon
+$$
+
+L'erreur résiduelle suit une loi normale :
+
+$$
+\epsilon \sim \mathcal{N}(0, \sigma^2)
+$$
+
+```{r modele}
+
+modele_lin= lm(log(total)~ température+ humidité+ vitesse_du_vent+ annee+ saison+ mois+ heure+ jour_de_la_semaine+ météo, data= donnees_new)
+```
+
+On estime les paramètres ensuite:
+
+```{r estimation}
+
+summary(modele_lin)
+```
+
+Les hypothèses du modèle linéaire sont respectées d'après les graphiques.
+
+```{r hypoth}
+
+par(mfrow=c(2,2))
+plot(modele_lin)
+```
+
+Ensuite nous allons utiliser l'ANOVA de type 2 pour tester les effets des variables du modèle.
+
+```{r anova 2}
+
+car::Anova(modele_lin)
+```
+
+On constate que toutes les variables du modèle sont significatives et que R2 nous suggère que le modèle est assez bon pour prédire la variable cible.
+
+## 3. Existe t-il une configuration de facteurs où l’utilisation des vélos serait maximal ?
+
+Pour répondre à cette question, nous allons étudier le signe des paramètres estimés pour chaque variable explicative.
+
+```{r}
+summary(modele_lin)
+```
+
+D'après le signe des différents estimateurs, les facteurs qui favorisent l'utilisation des vélos sont:
+
+-   Une température elévée
+
+-   Une humidité faible
+
+-   Une faible vitesse du vent
+
+-   Le printemps car la valeur estimée par rapport à la catégorie de comparaison est entre 0 et 1.
+
+-   Les heures de pointes: 8h, 9h, 17h, 18h, 19h et midi car les estimateurs pour les catégories de comparaison sont les plus élevées
+
+-   Une météo clémente car les estimateurs pour les catégories de comparaison sont tous négatifs
+
+-   Et enfin, l'utilisation des vélos augmente au fil des années.
+
+## 4. Pour une configuration donnée, peut on fournir un intervalle de confiance à 95% sur le nombre de vélos qui seraient loués ce jour là?
+
+Nous allons implémenter une fonction qui pour une configuration donnée, nous fournit l'intervalle de confiance à 95% sur le nombre de vélos qui seraient loués ce jour là.
+
+```{r confidence}
+
+intervalle_de_confiance= function(température, humidité, vitesse_du_vent, annee, saison, mois, heure, jour_de_la_semaine, météo){
+
+new_data= data.frame(
+  température, humidité, vitesse_du_vent, annee, saison, mois, heure, jour_de_la_semaine, météo)
+
+
+new_data= new_data |>
+  mutate(saison= factor(saison), météo= factor(météo), mois= factor(mois), heure= factor(heure), jour_de_la_semaine= factor(jour_de_la_semaine))
+
+# Faire des prédictions
+predictions_log <- predict(modele_lin, new_data, interval = "confidence")
+return(exp(predictions_log))   
+
+}
+  
+```
+
+Un exemple avec la configuration suivante:
+
+-   température=14;
+
+-   humidité=44;
+
+-   vitesse du vent= 13;
+
+-   annee= 1(2012);
+
+-   saison= 1;
+
+-   mois= 1(janvier);
+
+-   heure= 11
+
+-   jour_de_la_semaine= 4;
+
+-   météo= 3
+
+Pour cette configuration, on s'attend à obtenir 81 utilisateurs avec comme intervalle de confiance:
+
+$[ 74.89 , 87.00 ]$
+
+```{r Exemple}
+intervalle_de_confiance(14, 44, 13, 1, 1, 1, 11, 4, 3)
+```
